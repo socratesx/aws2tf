@@ -1,0 +1,101 @@
+
+import copy
+import os
+import boto3
+
+os.environ["TZ"] = "UTC"
+
+def create_template():
+    client = boto3.client('dynamodb')
+    result = client.list_tables()
+    all_tables = result["TableNames"]
+    
+    # Use the following list to exclude any tables from the template.
+    
+    non_production_tables = [] 
+    
+    table_names = [name for name in all_tables if name not in non_production_tables]
+
+    # Delete old template file if exists.
+    if os.path.exists("dynamodb_tables.tf"):
+        os.remove("dynamodb_tables.tf")
+
+    for name in table_names:
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table(name)
+        gsi = {}
+        
+        params = {
+            'TableName': name,
+            'KeySchema': table.key_schema,
+            'AttributeDefinitions': table.attribute_definitions,
+            'BillingMode': 'PROVISIONED',
+            'ProvisionedThroughput': {
+                'ReadCapacityUnits': table.provisioned_throughput['ReadCapacityUnits'],
+                'WriteCapacityUnits': table.provisioned_throughput['WriteCapacityUnits']}}
+        
+
+        if table.global_secondary_indexes:
+            gsi = table.global_secondary_indexes
+            params['GlobalSecondaryIndexes'] = gsi
+
+        if table.billing_mode_summary:
+            params['BillingMode'] = table.billing_mode_summary['BillingMode']
+
+        terraform_table="""     
+resource "aws_dynamodb_table" "%s-table" {
+  name           = "%s"
+  billing_mode   = "%s"
+  read_capacity  = %s
+  write_capacity = %s
+  hash_key       = "%s" """ % (params['TableName'], params['TableName'], params['BillingMode'], params['ProvisionedThroughput']['ReadCapacityUnits'],
+                               params['ProvisionedThroughput']['WriteCapacityUnits'],params['KeySchema'][0]['AttributeName'])
+
+        if len(params["KeySchema"]) > 1:
+            if params["KeySchema"][1]["KeyType"]=="RANGE":
+                terraform_table =terraform_table+"""
+  range_key      = "%s"
+                        
+                           """ % (params["KeySchema"][1]["AttributeName"])
+
+        for attr in list(params["AttributeDefinitions"]):
+            part ="""
+  attribute {
+    name = "%s"
+    type = "%s"
+  }
+          """ % (attr["AttributeName"],attr["AttributeType"])
+
+            terraform_table=terraform_table+part
+
+
+        if gsi:
+            for attr in gsi:
+                part="""
+  global_secondary_index { 
+    name               = "%s"
+    hash_key           = "%s"
+    write_capacity     = %s
+    read_capacity      = %s
+    projection_type    = "%s" """ % (attr["IndexName"],attr["KeySchema"][0]["AttributeName"],attr["ProvisionedThroughput"]["ReadCapacityUnits"],
+                     attr["ProvisionedThroughput"]["WriteCapacityUnits"],attr["Projection"]["ProjectionType"])
+                if len(attr["KeySchema"])>1:
+                    if attr["KeySchema"][1]["KeyType"] == "RANGE":
+                        part=part+"""
+    range_key          = "%s"
+  }               
+                    """ % (attr["KeySchema"][1]["AttributeName"])
+                else:
+                    part=part+"""
+  }
+                    """
+                terraform_table = terraform_table+part
+        outfile = open('dynamodb_tables.tf', 'a')
+        outfile.write(terraform_table+"\n}")
+        outfile.close()
+    print("Operation Completed! Check dynamoddb_tables.tf")
+
+
+if __name__ == "__main__":
+    create_template()
+
