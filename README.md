@@ -9,6 +9,10 @@ before managing them with terraform. Import scripts will be provided wherever po
 In order to use these functions you must have appropriate read access to the resources you are creating the terraform 
 configuration for. 
 
-## Current Support
+## Current AWS Resources Support
 
-Currently only Dynamodb Tables are supported. Many more will be added progressively. 
+Currently there are functions for the following  AWS Resources: 
+ - Dynamodb Tables
+ - Lambda Functions, Layers, Aliases & Provisioned Concurrency Configs 
+ 
+Many more will be added progressively. 
