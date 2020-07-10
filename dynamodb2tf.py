@@ -4,7 +4,7 @@ import textwrap
 import boto3
 
 os.environ["TZ"] = "UTC"
-TERRAFORM_FILE_PATH = "terraform/dynamodb/"
+TERRAFORM_FOLDER_PATH = "terraform/dynamodb/"
 
 
 class TerraformDict(dict):
@@ -27,14 +27,20 @@ def return_hash_and_range_keys(key_schema):
     return {'hash_key': hash_key, 'range_key': range_key}
 
 
-def dynamo_tables_to_tf(s=boto3.Session()):
+def dynamo_tables_to_tf(s):
+    """
+    This function creates a terraform configuration file containing all dynamodb tables resource declarations for all
+    tables found in AWS region of the Session object that is passed in args.
+    :param s: An AWS session instance. e.g. boto3.Session(region_name='us-east-1')
+    :return:
+    """
     print("Creating Terraform Configuration for Dynamodb Tables")
 
-    dynamodb_tables_tf_file_path = f"{TERRAFORM_FILE_PATH}/dynamodb_tables.tf"
+    dynamodb_tables_tf_file_path = f"{TERRAFORM_FOLDER_PATH}/dynamodb_tables.tf"
     dynamodb_tables_definitions_body = ""
 
-    if not os.path.exists(TERRAFORM_FILE_PATH):
-        os.makedirs(TERRAFORM_FILE_PATH)
+    if not os.path.exists(TERRAFORM_FOLDER_PATH):
+        os.makedirs(TERRAFORM_FOLDER_PATH)
 
     client = s.client('dynamodb')
     all_table_names = client.list_tables()["TableNames"]
@@ -151,3 +157,70 @@ def dynamo_tables_to_tf(s=boto3.Session()):
 
     with open(dynamodb_tables_tf_file_path, 'w') as f:
         f.write(textwrap.dedent(dynamodb_tables_definitions_body))
+
+
+def event_mappings2tf(session, lambda_reference="terraform"):
+    """
+    This function creates the event mappings for any Lambda function triggers specified in dynamodb tables with enabled
+    streams.
+    :param session: The AWS session object of boto3.Session() class.
+    :param lambda_reference: This is a special variable that controls the format of the lambda function name in the
+    resource declaration.
+
+    The parameter can be either 'terraform' or 'arn'. When 'terraform', which is the default, is passed the function
+    name will be referenced as a terraform resource using the terraform format,
+    aws_lambda_function.{func_name}.arn:{qualifier}. In case of 'arn' then an extra file will be created containing the
+    aws_lambda data sources. The arn will be taken from the data sources.
+
+    This has a use if the terraform configuration uses separate state files for lambda functions and dynamodb tables.
+    :return:
+    """
+    lambda_client = session.client('lambda')
+
+    event_mappings_tf_file = f"{TERRAFORM_FOLDER_PATH}/event_mappings.tf"
+    event_mapping_tf_body = ""
+    data_sources_tf_file = f"{TERRAFORM_FOLDER_PATH}/data_sources.tf"
+    data_sources_tf_body = ""
+
+    for event in lambda_client.list_event_source_mappings()['EventSourceMappings']:
+        splitted_arn = event['FunctionArn'].split(':')
+        func_name = splitted_arn[splitted_arn.index('function')+1]
+        if lambda_reference == 'arn':
+            head = f'data "aws_lambda_function" "{func_name}"'
+            if head not in data_sources_tf_body:
+                data_sources_tf_body += f"""
+                    {head} {{
+                      function_name = "{func_name}"
+                    }}
+                """
+            f_name = f"data.aws_lambda_function.{func_name}.qualified_arn"
+        else:
+            qualifier = splitted_arn[-1]
+            if qualifier != func_name:
+                f_name = f'"${{aws_lambda_function.{func_name}.arn}}:{qualifier}"'
+            else:
+                f_name = "aws_lambda_function.{func_name}.arn"
+
+        source_arn = event['EventSourceArn']
+
+        if 'dynamodb' in source_arn:
+            splitted_arn = source_arn.split('/')
+            table_name = splitted_arn[1]
+            event_mapping_tf_body += f"""
+                resource "aws_lambda_event_source_mapping" "{func_name}-{table_name}" {{
+                  function_name     = {f_name}
+                  event_source_arn  = aws_dynamodb_table.{table_name}.stream_arn
+                  starting_position = "LATEST"
+                }}"""
+    with open(event_mappings_tf_file, 'w') as f:
+        f.write(textwrap.dedent(event_mapping_tf_body))
+
+    if data_sources_tf_body:
+        with open(data_sources_tf_file, 'w') as f:
+            f.write(textwrap.dedent(data_sources_tf_body))
+
+
+if __name__ == "__main__":
+    session = boto3.Session(region_name='eu-central-1')
+    dynamo_tables_to_tf(session)
+    event_mappings2tf(session)
