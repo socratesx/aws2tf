@@ -12,7 +12,7 @@ configuration for.
 ## Current AWS Resources Support
 
 Currently there are functions for the following  AWS Resources: 
- - Dynamodb Tables
+ - Dynamodb Tables, Event Mappings for Stream Enabled Tables
  - Lambda Functions, Layers, Aliases & Provisioned Concurrency Configs 
  
 Many more will be added progressively. 
